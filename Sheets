@@ -1,0 +1,223 @@
+*&---------------------------------------------------------------------*
+*& Report Y_TEST5
+*&---------------------------------------------------------------------*
+*& quick example
+*&---------------------------------------------------------------------*
+REPORT y_test5.
+
+START-OF-SELECTION. 
+
+*----------------------------------------------------------------------*
+* Variables internas
+*----------------------------------------------------------------------*
+  DATA: vl_filecontent TYPE xstring,
+        vl_error       TYPE string,
+        vl_renglon     TYPE sy-index VALUE 1,
+        vl_column      TYPE sy-index,
+        sl_base        TYPE kna1,
+        tl_comp        TYPE abap_component_tab,
+        tg_alv_ff      TYPE TABLE OF kna1,
+        tg_alv         TYPE STANDARD TABLE OF kna1.
+
+*----------------------------------------------------------------------*
+* Objetos internas
+*----------------------------------------------------------------------*
+  DATA: ol_msg_format    TYPE REF TO cx_openxml_format,
+        ol_msg_not_found TYPE REF TO cx_openxml_not_found,
+        ol_msg_not_allow TYPE REF TO cx_openxml_not_allowed,
+        og_alv           TYPE REF TO cl_salv_table,
+        ol_columns       TYPE REF TO cl_salv_columns_table, "Colums general
+        ol_column        TYPE REF TO cl_salv_column_table,  "Column
+        ol_col_ref       TYPE salv_t_column_ref,         "Structure dynamicIM184841
+        ol_ex_message    TYPE REF TO cx_salv_msg,
+        ol_struct        TYPE REF TO cl_abap_structdescr.
+
+  CONSTANTS: c_e TYPE char1     VALUE 'E'.
+
+  FIELD-SYMBOLS: <vl_any> TYPE any.
+
+  "Get file content from table
+  CLEAR vl_filecontent.
+
+  IF og_alv IS NOT BOUND.
+
+    tg_alv_ff = CORRESPONDING #( tg_alv ).
+
+    TRY.
+        cl_salv_table=>factory(
+        EXPORTING
+         list_display   = if_salv_c_bool_sap=>false
+        IMPORTING
+         r_salv_table   = og_alv
+        CHANGING
+         t_table        = tg_alv_ff ).
+
+        TRY.
+
+            DATA(ol_layout) = og_alv->get_layout( ).
+
+            ol_layout->set_save_restriction( if_salv_c_layout=>restrict_none ).
+            ol_layout->set_default( abap_true ).
+
+          CATCH  cx_salv_not_found INTO DATA(ol_salv_not_found_col) ##NEEDED.
+
+        ENDTRY.
+
+      CATCH cx_salv_msg INTO ol_ex_message ##NO_HANDLER.
+
+    ENDTRY.
+  ENDIF.
+
+  DATA(ol_xlsx_handling) = cl_ehfnd_xlsx=>get_instance( ).
+
+  "Crear instancia para generar excel
+  DATA(ol_xlsx_document) = ol_xlsx_handling->create_doc( ).
+
+  "Crear instancia
+  DATA(ol_xlsx_sheets) = ol_xlsx_document->get_sheets( ).
+
+  TRY .
+
+      DATA(ol_first_xlsx_sheet) = ol_xlsx_document->get_sheet_by_id( ol_xlsx_sheets[ 1 ]-sheet_id ).
+
+    CATCH cx_openxml_format INTO ol_msg_format.
+
+      vl_error = ol_msg_format->get_text( ).
+      MESSAGE vl_error TYPE c_e.
+
+    CATCH cx_openxml_not_found INTO ol_msg_not_found.
+      vl_error = ol_msg_not_found->get_text( ).
+      MESSAGE vl_error TYPE c_e.
+
+  ENDTRY.
+
+  ol_first_xlsx_sheet->change_sheet_name( iv_new_name = space ).
+  " Get structure from ALV
+
+* Datos de Columnas del ALV
+  ol_columns  = og_alv->get_columns( ).
+  ol_col_ref  = ol_columns->get( ).
+
+* Pone cabeceras de acuerdo a la tabla de salida
+  ol_struct ?= cl_abap_typedescr=>describe_by_data( sl_base ).
+  tl_comp = ol_struct->get_components( ).
+
+* Genera cabecera en excel Renglon 1
+  LOOP AT tl_comp ASSIGNING FIELD-SYMBOL(<sl_columns>).
+
+    ADD 1 TO vl_column.
+
+*     Texto de columnas en ALV
+    READ TABLE  ol_col_ref ASSIGNING FIELD-SYMBOL(<sl_col_ref>)
+        WITH KEY columnname = <sl_columns>-name ##WARN_OK.
+
+    IF sy-subrc EQ 0.
+
+      "Conditionally set the column type as key or non key
+      ol_column ?= <sl_col_ref>-r_column.
+
+*       Asigna valores de Cabecera en excel
+      ol_first_xlsx_sheet->set_cell_content( iv_row    = 1
+                                             iv_column = vl_column
+                                             iv_value  = ol_column->get_long_text( ) ).
+    ENDIF.
+
+  ENDLOOP.
+
+  CLEAR vl_column."Se utiliza en la del excel
+
+  SELECT  *
+    FROM kna1
+    INTO TABLE @DATA(it_data_file)
+              WHERE land1 EQ 'GB'.
+
+*   Genera datos en excel
+  LOOP AT it_data_file ASSIGNING FIELD-SYMBOL(<sl_data_file>).
+
+    ADD 1 TO vl_renglon.
+
+*   Por cada renglón, debe leer todas las columnas
+    LOOP AT tl_comp ASSIGNING FIELD-SYMBOL(<sl_columnas>).
+
+      ADD 1 TO vl_column.
+
+*     Asigna valor a columna del nombre   vl_namecol dinamica
+      ASSIGN COMPONENT <sl_columnas>-name OF STRUCTURE <sl_data_file> TO <vl_any>.
+
+      DATA: vl_data TYPE char100.
+      vl_data = <vl_any>.
+
+      ol_first_xlsx_sheet->set_cell_content( iv_row    = vl_renglon
+                                             iv_column = vl_column
+                                             iv_value  = vl_data ).
+
+    ENDLOOP.
+
+    CLEAR vl_column.
+
+  ENDLOOP.
+
+  TRY.
+
+      vl_filecontent = ol_xlsx_document->save( ).
+
+    CATCH cx_openxml_format INTO ol_msg_format.      " Packaging Error - Invalid Content
+      vl_error = ol_msg_format->get_text( ).
+      MESSAGE vl_error TYPE c_e.
+
+    CATCH cx_openxml_not_found INTO ol_msg_not_found.
+      vl_error = ol_msg_not_found->get_text( ).
+      MESSAGE vl_error TYPE c_e.
+
+    CATCH cx_openxml_not_allowed INTO ol_msg_not_allow.
+      vl_error = ol_msg_not_allow->get_text( ).
+      MESSAGE vl_error TYPE c_e.
+
+  ENDTRY.
+
+  DATA: iv_file TYPE localfile VALUE 'C:/test.xlsx'.
+
+  cl_scp_change_db=>xstr_to_xtab( EXPORTING im_xstring = vl_filecontent
+                                  IMPORTING ex_xtab    = DATA(ti_filecontenttab) ).
+
+  cl_gui_frontend_services=>gui_download(
+    EXPORTING
+      bin_filesize              = xstrlen( vl_filecontent )
+      filename                  = CONV #( iv_file )
+      filetype                  = 'BIN'
+      confirm_overwrite         = abap_true
+    IMPORTING
+      filelength                = DATA(vl_bytestransferred) ##NEEDED
+    CHANGING
+      data_tab                  = ti_filecontenttab
+    EXCEPTIONS
+      file_write_error          = 1
+      no_batch                  = 2
+      gui_refuse_filetransfer   = 3
+      invalid_type              = 4
+      no_authority              = 5
+      unknown_error             = 6
+      header_not_allowed        = 7
+      separator_not_allowed     = 8
+      filesize_not_allowed      = 9
+      header_too_long           = 10
+      dp_error_create           = 11
+      dp_error_send             = 12
+      dp_error_write            = 13
+      unknown_dp_error          = 14
+      access_denied             = 15
+      dp_out_of_memory          = 16
+      disk_full                 = 17
+      dp_timeout                = 18
+      file_not_found            = 19
+      dataprovider_exception    = 20
+      control_flush_error       = 21
+      not_supported_by_gui      = 22
+      error_no_gui              = 23
+      OTHERS                    = 24
+  ).
+
+  IF sy-subrc NE 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+               WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
